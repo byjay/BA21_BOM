@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>도면 관리 시스템 | Netlify + Supabase + GCP</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            line-height: 1.6;
+            background-color: #f4f7f6;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #eee;
+            border-radius: 8px;
+        }
+
+        input[type="text"],
+        input[type="email"],
+        input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #3498db;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .success {
+            color: #27ae60;
+        }
+
+        .error {
+            color: #e74c3c;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🏗️ 도면 관리 시스템</h1>
+
+        <div class="section" id="loginSection">
+            <h3>사용자 정보</h3>
+            <input type="email" id="userEmail" placeholder="구글 이메일 입력" value="test@gmail.com">
+            <p><small>* 실제 운영 시 구글 OAuth 연동 구간입니다.</small></p>
+        </div>
+
+        <div class="section" id="uploadSection">
+            <h3>도면 업로드</h3>
+            <input type="text" id="docTitle" placeholder="도면 제목 (예: 1층 평면도)">
+            <input type="file" id="fileInput">
+            <button onclick="handleUpload()" id="upBtn">업로드 및 저장</button>
+            <div id="status"></div>
+        </div>
+    </div>
+
+    <script>
+        async function handleUpload() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            const title = document.getElementById('docTitle').value;
+            const email = document.getElementById('userEmail').value;
+            const statusDiv = document.getElementById('status');
+            const btn = document.getElementById('upBtn');
+
+            if (!file || !title) {
+                alert('파일과 제목을 입력하세요.');
+                return;
+            }
+
+            btn.disabled = true;
+            statusDiv.className = '';
+            statusDiv.innerText = "⏳ 1단계: 업로드 권한(Signed URL) 요청 중...";
+
+            try {
+                // 1. Netlify Functions에게 GCS Signed URL 요청
+                const authRes = await fetch('/.netlify/functions/upload-auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileName: file.name, fileType: file.type })
+                });
+
+                if (!authRes.ok) throw new Error("업로드 권한 요청 실패: " + await authRes.text());
+                const { uploadUrl, publicUrl } = await authRes.json();
+
+                // 2. 구글 클라우드 스토리지(GCS)에 직접 업로드
+                statusDiv.innerText = "🚀 2단계: 구글 클라우드로 직접 전송 중...";
+                const uploadRes = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': file.type },
+                    body: file
+                });
+
+                if (!uploadRes.ok) throw new Error("GCS 파일 전송 실패");
+
+                // 3. Supabase DB에 메타데이터 저장
+                statusDiv.innerText = "💾 3단계: Supabase 데이터베이스 기록 중...";
+                const dbRes = await fetch('/.netlify/functions/save-meta', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        fileUrl: publicUrl,
+                        userEmail: email
+                    })
+                });
+
+                if (dbRes.ok) {
+                    statusDiv.innerHTML = "<span class='success'>✅ 모든 작업 완료! 성공적으로 저장되었습니다.</span>";
+                    alert("업로드 성공!");
+                    // 입력창 초기화
+                    document.getElementById('docTitle').value = '';
+                    document.getElementById('fileInput').value = '';
+                } else {
+                    throw new Error("DB 저장 실패: " + await dbRes.text());
+                }
+
+            } catch (err) {
+                console.error(err);
+                statusDiv.innerHTML = `<span class='error'>❌ 오류 발생: ${err.message}</span>`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+
+</html>
