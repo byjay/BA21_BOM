@@ -45,7 +45,51 @@
             },
         }
     </script>
+    <!-- Local Data Loaded as JS Variable -->
+    <script src="drawing_functions.js"></script>
+    <script src="all_data.js"></script>
+    <script src="drawing_list.js"></script>
 
+    <!-- Pre-define critical inline functions to prevent race conditions -->
+    <script>
+        window.switchView = function (view) {
+            document.querySelectorAll('.view-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(`view-${view}`).classList.add('active');
+            document.getElementById(`tab-${view}`).classList.add('active');
+
+            if (view === 'drawing-list') {
+                if (window.initDrawingListTable) initDrawingListTable();
+            } else if (view !== 'table') {
+                renderDrawingList(view);
+            }
+        };
+
+        window.clearAllFilters = function () {
+            document.getElementById('mobile-search-input').value = '';
+            document.getElementById('search-block').value = '';
+            document.getElementById('search-dwg-title').value = '';
+            document.getElementById('search-mod-no').value = '';
+            document.getElementById('search-steel-no').value = '';
+            document.getElementById('search-matno').value = '';
+            document.getElementById('search-weld-id').value = '';
+        };
+
+        window.reloadData = function () {
+            window.location.reload();
+        };
+
+        window.exportExcel = function () {
+            if (!table) {
+                alert('테이블이 초기화되지 않았습니다');
+                return;
+            }
+            table.download('bom_export.xlsx', 'xlsx', { sheetName: 'BOM Export' });
+        };
+    </script>
+    <script src="drawing_functions.js"></script>
+    <script src="all_data.js"></script>
+    <script src="drawing_list.js"></script>
     <!-- Local Data Loaded as JS Variable -->
     <script src="all_data.js"></script>
     <script src="drawing_list.js"></script>
@@ -212,30 +256,36 @@
         }
 
         .block-filter-btn,
+        .mod-filter-btn,
         .t-filter-btn {
-            padding: 4px 12px;
-            font-size: 11px;
-            font-weight: 700;
-            border-radius: 6px;
-            border: 1px solid #334155;
-            background: #1e293b;
-            color: #94a3b8;
-            transition: all 0.2s;
-        }
+            .t-filter-btn {
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: 700;
+                border-radius: 6px;
+                border: 1px solid #334155;
+                background: #1e293b;
+                color: #94a3b8;
+                transition: all 0.2s;
+            }
 
-        .block-filter-btn:hover,
-        .t-filter-btn:hover {
-            border-color: #475569;
-            color: #e2e8f0;
-        }
+            .block-filter-btn:hover,
+            .mod-filter-btn:hover,
+            .t-filter-btn:hover {
+                .t-filter-btn:hover {
+                    border-color: #475569;
+                    color: #e2e8f0;
+                }
 
-        .block-filter-btn.active,
-        .t-filter-btn.active {
-            background: #2463eb;
-            color: white;
-            border-color: #2463eb;
-            box-shadow: 0 0 10px rgba(36, 99, 235, 0.4);
-        }
+                .block-filter-btn.active,
+                .mod-filter-btn.active,
+                .t-filter-btn.active {
+                    .t-filter-btn.active {
+                        background: #2463eb;
+                        color: white;
+                        border-color: #2463eb;
+                        box-shadow: 0 0 10px rgba(36, 99, 235, 0.4);
+                    }
     </style>
 </head>
 
@@ -647,13 +697,13 @@
                 if (response.ok) {
                     const data = await response.json();
                     console.log("Backend response:", data);
-                    
+
                     // 로컬 파일 있으면 시스템 뷰어로 열림
                     if (data.status === 'launched') {
                         console.log("Successfully launched via system viewer");
                         return;
                     }
-                    
+
                     // R2 Fallback - 로컬 파일 없으면 R2 URL 그냥 열림
                     if (data.status === 'r2_fallback' && data.url) {
                         console.log("Opening R2 URL in browser:", data.url);
@@ -708,6 +758,14 @@
                 filteredData = [];
 
                 // Load new data with cache-busting timestamp
+                // Note: drawing_list.js is loaded once on page load, we don't reload it
+                await new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = `all_data.js?t=${Date.now()}`;
+                    script.onload = resolve;
+                    script.onerror = () => reject(new Error('all_data.js를 로드하지 못했습니다'));
+                    document.head.appendChild(script);
+                });
                 await Promise.all([
                     new Promise((resolve, reject) => {
                         const script = document.createElement('script');
@@ -769,6 +827,12 @@
                         initPcView();
                         // Also reinit drawing list if tab is active
                         if (document.getElementById('view-drawing-list').classList.contains('active')) {
+                            // Wait for drawing_functions.js to be fully loaded
+                            setTimeout(() => {
+                                if (window.initDrawingListTable) initDrawingListTable();
+                            }, 100);
+                        }
+                        if (document.getElementById('view-drawing-list').classList.contains('active')) {
                             if (window.initDrawingListTable) initDrawingListTable();
                         }
                     }
@@ -810,8 +874,11 @@
             } catch (e) { }
 
             try {
-                if (typeof window.ALL_DATA === 'undefined') {
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                // Wait for ALL_DATA to be available (with timeout)
+                let retries = 10;
+                while (typeof window.ALL_DATA === 'undefined' && retries > 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    retries--;
                 }
 
                 if (window.ALL_DATA && window.ALL_DATA.length > 0) {
@@ -843,19 +910,28 @@
                         initPcView();
                         // Also init drawing list if tab is active
                         if (document.getElementById('view-drawing-list').classList.contains('active')) {
+                            // Wait for drawing_functions.js to be fully loaded
+                            setTimeout(() => {
+                                if (window.initDrawingListTable) initDrawingListTable();
+                            }, 100);
+                        }
+                        if (document.getElementById('view-drawing-list').classList.contains('active')) {
                             if (window.initDrawingListTable) initDrawingListTable();
                         }
                     }
-
                 } else {
-                    throw new Error("No data found");
+                    throw new Error("No data found after waiting");
                 }
             } catch (e) {
-                console.error(e);
-                if (statusEl) { statusEl.innerText = "❌ Load Failed"; statusEl.classList.add('text-red-400'); }
+                console.error('Initialization error:', e);
+                if (statusEl) {
+                    statusEl.innerText = "❌ 로드 실패";
+                    statusEl.classList.remove('bg-blue-900/30', 'text-blue-300', 'animate-pulse');
+                    statusEl.classList.add('bg-red-900/30', 'text-red-300');
+                }
+                if (mobStats) mobStats.innerText = "Load Failed";
             }
         });
-
         // ----------------------------------------
         // PC Logic
         // ----------------------------------------
@@ -1423,6 +1499,18 @@
         }
 
         // View Switcher (PC Only)
+        window.switchView = function (view) {
+            document.querySelectorAll('.view-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(`view-${view}`).classList.add('active');
+            document.getElementById(`tab-${view}`).classList.add('active');
+
+            if (view === 'drawing-list') {
+                if (window.initDrawingListTable) initDrawingListTable();
+            } else if (view !== 'table') {
+                renderDrawingList(view);
+            }
+        };
         function switchView(view) {
             document.querySelectorAll('.view-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -1611,10 +1699,7 @@
                 if (row) row.update({ Remarks: text });
             }
         }
+    </script>
+</body>
 
-    <!-- Drawing Functions -->
-    <script src="drawing_functions.js"></script>
-
-    <!-- All Data -->
-
-    <!-- Fabrication List Data -->
+</html>
